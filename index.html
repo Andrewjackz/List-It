@@ -332,8 +332,8 @@ function renderHome(app){
     onchange:e=>{const fs=[...e.target.files].slice(0,imgLimits?imgLimits.maxCount:1);e.target.value="";if(fs.length)startScan(fs)}});
   app.append(h("div",{class:"actions"},
     h("label",{class:"btn primary camera","aria-disabled":String(!canPhoto)},"Photograph a list",fileInput),
-    h("button",{class:"btn",disabled:!live,onclick:()=>{st.review={mode:"type",status:"typing",text:"",title:"",items:[],photos:[]};st.view="review";render();setTimeout(()=>document.getElementById("type-text")?.focus(),0)}},"Type a list")));
-  if(live&&!canPhoto)app.append(h("p",{class:"hint"},sample===null?"From a photo: open it in Photos, press and hold the text, tap Select All, then Copy. Tap Type a list and paste. Each line becomes an item.":"Photo reading is starting up…"));
+    h("button",{class:"btn",id:"new-list",disabled:!live,onclick:()=>{st.review={mode:"name",status:"naming",title:"",due:""};st.view="review";render();window.scrollTo(0,0);setTimeout(()=>document.getElementById("nl-title")?.focus(),0)}},"+ New list")));
+  if(live&&!canPhoto)app.append(h("p",{class:"hint"},sample===null?"From a photo: open it in Photos, press and hold the text, tap Select All, then Copy. Then tap + New list, name it, tap + Add item and paste. Each line becomes an item.":"Photo reading is starting up…"));
   else app.append(h("p",{class:"hint"},"Take the photo straight on, in good light. You check every line before it becomes a checklist."));
 
   const dk=l=>{const i=dueInfo(l.due);return i?i.diff:Infinity};
@@ -429,9 +429,25 @@ function linesToItems(text){
 function renderReview(app){
   const r=st.review,target=r.mergeInto&&getList(r.mergeInto);
   app.append(h("div",{class:"topbar"},h("button",{class:"back",onclick:()=>{scanCtl&&scanCtl.abort();(r.urls||[]).forEach(u=>URL.revokeObjectURL(u));st.review=null;if(target){st.view="list";st.openId=target.id}else st.view="home";render()}},"← Cancel")));
-  app.append(h("h1",{style:"margin-top:6px"},target?"New items for "+(target.title||"this list"):r.mode==="type"?"Type a list":"Check the list"));
+  app.append(h("h1",{style:"margin-top:6px"},target?"New items for "+(target.title||"this list"):r.mode==="name"?"New list":r.mode==="type"?"Type a list":"Check the list"));
   if(r.urls&&r.urls.length)app.append(h("div",{class:"photos"},r.urls.map(u=>h("img",{src:u,alt:"Photo of the list"}))));
 
+  /* new list: name first, then straight into the empty list with the add box open */
+  if(r.mode==="name"){
+    const create=()=>{const el=document.getElementById("nl-title");const t=(el&&el.value||"").trim();
+      if(!t){r.err=true;render();setTimeout(()=>document.getElementById("nl-title")?.focus(),0);return}
+      const l={id:rid()+rid(),title:t,createdAt:new Date().toISOString(),status:"active",archivedAt:null,due:r.due||null,photos:[],items:[],
+        rank:lists.reduce((m,x)=>typeof x.rank==="number"?Math.min(m,x.rank-1):m,0)};
+      st.review=null;st.pending=false;saveList(l);openList(l.id);
+      st.inserting={at:0,text:""};render();setTimeout(()=>document.getElementById("ins-text")?.focus(),0)};
+    app.append(h("label",{class:"hint",for:"nl-title",style:"display:block;margin-top:16px"},"List name"),
+      h("input",{class:"t title",id:"nl-title",value:r.title||"",placeholder:"e.g. Weekend errands",autocomplete:"off",
+        oninput:e=>{r.title=e.target.value;if(r.err){r.err=false;e.target.nextElementSibling?.remove()}},onkeydown:e=>{if(e.key==="Enter"){e.preventDefault();create()}}}),
+      r.err?h("p",{class:"hint",style:"color:var(--red)"},"Give the list a name first."):null,
+      h("label",{class:"f"},"Due date (optional)",h("input",{class:"t",type:"date",id:"nl-due",value:r.due||"",oninput:e=>{r.due=e.target.value}})),
+      h("div",{class:"row"},h("button",{class:"btn primary",onclick:create},"Create list")));
+    return;
+  }
   if(r.mode==="type"&&r.status==="typing"){
     app.append(h("p",{class:"hint"},"One item per line. Numbers and bullets are removed."),
       h("textarea",{class:"t",id:"type-text",placeholder:"Buy light bulbs\nCall plumber about geyser\nBook car service",oninput:e=>{r.text=e.target.value}},r.text||""),
@@ -555,7 +571,12 @@ function renderList(app){
     for(let i=0;i<=items.length;i++){const o=document.createElement("option");o.value=String(i);
       o.textContent=(i+1)+(i===0?" (top)":i===items.length?" (bottom)":"");if(i===at)o.selected=true;pick.append(o)}
     return h("li",{class:"insert"},ctrl(h("span",{class:"no"},"+")),
-      h("div",{class:"txt",style:"cursor:auto"},area({id:"ins-text",value:(st.inserting&&st.inserting.text)||"",placeholder:"New item","aria-label":"New item",
+      h("div",{class:"txt",style:"cursor:auto"},area({id:"ins-text",value:(st.inserting&&st.inserting.text)||"",placeholder:"New item (or paste several lines)","aria-label":"New item",
+        onpaste:e=>{const t=(e.clipboardData&&e.clipboardData.getData("text"))||"";const its=linesToItems(t);if(its.length<2)return;e.preventDefault();
+          const cur=(document.getElementById("ins-text")?.value||"").trim();const texts=(cur?[cur]:[]).concat(its.map(i=>i.text));
+          const pos=Math.max(0,Math.min(at,items.length));const arr=[...items];arr.splice(pos,0,...texts.map(x=>({id:rid(),text:x,done:false,doneAt:null})));
+          if(st.filter==="done"){st.filter="all";try{localStorage.setItem("photolists.filter","all")}catch(_){}}
+          st.inserting=null;st.pending=false;saveList({...l,status:"active",archivedAt:null,items:arr});render()},
         oninput:e=>{if(st.inserting)st.inserting.text=e.target.value},
         onkeydown:e=>{if(e.key==="Enter")save();if(e.key==="Escape")close()}})),
       h("div",{class:"tools"},h("label",{class:"putat"},"Put at",pick),
